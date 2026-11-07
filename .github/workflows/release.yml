@@ -1,7 +1,7 @@
 name: Release
+# Manual until the first release; on push it would publish whatever version package.json holds
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 permissions:
   contents: write
