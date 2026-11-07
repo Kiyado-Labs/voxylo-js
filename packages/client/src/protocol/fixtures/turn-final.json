@@ -1,0 +1,16 @@
+{
+  "turnId": "t1",
+  "role": "assistant",
+  "inputMode": "voice",
+  "content": "Hello, I can show you my projects.",
+  "atMs": 1200,
+  "latencyMs": 640,
+  "toolCalls": [
+    { "toolId": "c1", "name": "openProject", "args": { "slug": "voxylo" }, "result": { "ok": true }, "latencyMs": 120, "source": "client" },
+    { "toolId": "c2", "name": "kb_search", "args": { "q": "projects" } },
+    { "name": "broken" }
+  ],
+  "blocks": [
+    { "type": "buttons", "id": "b1", "prompt": "Pick one", "actions": [{ "id": "a1", "kind": "reply", "label": "Voxylo", "value": "voxylo" }] }
+  ]
+}

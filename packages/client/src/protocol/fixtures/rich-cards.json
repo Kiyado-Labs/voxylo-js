@@ -1,0 +1,3 @@
+{ "atMs": 1400, "block": { "type": "cards", "id": "c1", "cards": [
+  { "title": "Voxylo", "description": "Voice agents", "imageUrl": "https://cdn.example.com/v.png", "actions": [{ "id": "a1", "kind": "reply", "label": "More", "value": "more voxylo" }] }
+] } }

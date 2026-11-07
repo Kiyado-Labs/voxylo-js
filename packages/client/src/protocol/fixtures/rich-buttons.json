@@ -1,0 +1,5 @@
+{ "turnId": "t1", "atMs": 1300, "block": { "type": "buttons", "id": "b2", "actions": [
+  { "id": "a1", "kind": "reply", "label": "Yes", "value": "yes" },
+  { "id": "a2", "kind": "url", "label": "Docs", "url": "https://voxylo.cloud/docs" },
+  { "id": "a3", "kind": "url", "label": "Bad", "url": "http://insecure.example.com" }
+] } }

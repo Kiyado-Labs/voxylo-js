@@ -1,0 +1,1 @@
+{ "type": "warning", "code": "client_tool_rejected", "detail": "openProject: name collides with a server tool" }
