@@ -7,12 +7,14 @@ export type { VoiceAgent, VoiceAgentStatus } from "./use-voice-agent";
 export { useAudioLevel } from "./use-audio-level";
 export { useClientTool } from "./use-client-tool";
 export { useAgentContext } from "./use-agent-context";
+export { useTranscript } from "./use-transcript";
 export { REACT_SDK_NAME, REACT_SDK_VERSION } from "./version";
 export type {
   AgentContext,
   AgentState,
   ClientToolDefinition,
   JsonSchemaObject,
+  Message,
   ToolCallEvent,
   ClientState,
   ConnectionStatus,
