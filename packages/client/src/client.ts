@@ -17,6 +17,7 @@ import {
   type CallerInfo,
   type VoxyloSession,
 } from "./session";
+import { reduceMessages, settleAll, type MessageEvent } from "./state/messages";
 import { createStore } from "./state/store";
 import { INITIAL_STATE, type ClientState } from "./state/types";
 import { ToolRegistry, type ClientToolDefinition, type ToolCallEvent } from "./tools";
@@ -49,6 +50,8 @@ export interface ConnectOptions {
 export interface VoxyloClientEvents {
   turn: Turn;
   agentText: AgentTextEvent;
+  /** The user's words as the agent hears them, live while they speak */
+  userText: AgentTextEvent;
   toolCall: ToolCallEvent;
   sessionEnd: SessionEndReason;
   error: VoxyloError;
@@ -154,6 +157,7 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
   async function teardown() {
     const c = conn;
     conn = null;
+    store.set((st) => ({ messages: settleAll(st.messages) }));
     tools.detach();
     context.detach();
     releaseAudio();
@@ -174,6 +178,10 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
     emit("sessionEnd", reason);
   }
 
+  function addToConversation(e: MessageEvent) {
+    store.set((s) => ({ messages: reduceMessages(s.messages, e, Date.now()) }));
+  }
+
   function handlersFor(a: number): RoomHandlers {
     let agentReady = false;
     const live =
@@ -182,9 +190,19 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
         if (a === attempt) fn(...args);
       };
     return {
-      onTurn: live((t) => emit("turn", t)),
-      onAgentText: live((e) => emit("agentText", e)),
-      onRich: () => {},
+      onTurn: live((t) => {
+        addToConversation({ kind: "turn", turn: t });
+        emit("turn", t);
+      }),
+      onAgentText: live((e) => {
+        addToConversation({ kind: "agentText", ...e });
+        emit("agentText", e);
+      }),
+      onUserText: live((e) => {
+        addToConversation({ kind: "userText", ...e });
+        emit("userText", e);
+      }),
+      onRich: live((m) => addToConversation({ kind: "rich", message: m })),
       onSessionEvent: live((e) => {
         if (e.type === "ended") endSession(e.reason);
         // The worker rejected a tool or the context; the developer needs to see why

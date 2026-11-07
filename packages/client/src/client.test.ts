@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnalyserLike, BrowserEnv } from "./audio";
 import { createClient, type VoxyloClientOptions } from "./client";
 import { VoxyloError } from "./errors";
-import { FakeRoom, fakeAudioTrack } from "./room/fake-room";
+import { FakeRoom, FakeTextReader, fakeAudioTrack } from "./room/fake-room";
 import type { ConnectionStatus } from "./state/types";
 
 const SESSION = {
@@ -490,6 +490,49 @@ describe("createClient", () => {
       t.room.sendData("voxylo.session", { type: "warning", code: "client_tool_rejected", detail: "kb_search: name collides with a server tool" }, t.room.addAgent());
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("client_tool_rejected"), expect.stringContaining("kb_search"));
       warn.mockRestore();
+    });
+  });
+
+  describe("live captions", () => {
+    it("builds the conversation in messages as both sides speak", async () => {
+      const t = setup();
+      const onUser = vi.fn();
+      t.client.on("userText", onUser);
+      await t.client.connect({ mode: "voice" });
+      const agent = t.room.addAgent("agent-1");
+      const me = t.room.localParticipant.identity;
+
+      await t.room.streamText("lk.transcription", new FakeTextReader("x1", ["Show me"], { "lk.segment_id": "SG_1", "lk.transcription_final": "false" }), me);
+      await vi.waitFor(() => expect(t.client.getSnapshot().messages).toHaveLength(1));
+      expect(t.client.getSnapshot().messages[0]).toMatchObject({ role: "user", text: "Show me", streaming: true });
+      expect(onUser).toHaveBeenCalledWith({ streamId: "SG_1", text: "Show me", done: false });
+
+      await t.room.streamText("lk.transcription", new FakeTextReader("x2", ["Show me your work."], { "lk.segment_id": "SG_1", "lk.transcription_final": "true" }), me);
+      t.room.sendData("voxylo.turn", { turnId: "u1", role: "user", inputMode: "voice", content: "Show me your work.", atMs: 5 }, agent);
+      await t.room.streamText("lk.transcription", new FakeTextReader("a1", ["Sure, ", "here's his work."], { "lk.segment_id": "SG_2" }), "agent-1");
+      await vi.waitFor(() => expect(t.client.getSnapshot().messages.at(-1)?.streaming).toBe(false));
+
+      expect(t.client.getSnapshot().messages.map((m) => `${m.role}:${m.text}`)).toEqual(["user:Show me your work.", "agent:Sure, here's his work."]);
+    });
+
+    it("stops every live line when the call ends mid-sentence", async () => {
+      const t = setup({}, fakeEnv(), okFetch({ ...SESSION, resumed: true }));
+      await t.client.connect({ mode: "voice" });
+      await t.room.streamText("lk.transcription", new FakeTextReader("x1", ["Show me"], { "lk.segment_id": "SG_1", "lk.transcription_final": "false" }), t.room.localParticipant.identity);
+      await vi.waitFor(() => expect(t.client.getSnapshot().messages).toHaveLength(1));
+      await t.client.disconnect();
+      expect(t.client.getSnapshot().messages[0]?.streaming).toBe(false);
+    });
+
+    it("starts a fresh conversation when the server starts a new chat", async () => {
+      const t = setup();
+      await t.client.connect();
+      t.room.sendData("voxylo.turn", { turnId: "a", role: "agent", content: "Hi", atMs: 1 }, t.room.addAgent());
+      expect(t.client.getSnapshot().messages).toHaveLength(1);
+      await t.client.disconnect();
+      expect(t.client.getSnapshot().messages).toHaveLength(1);
+      await t.client.connect();
+      expect(t.client.getSnapshot().messages).toEqual([]);
     });
   });
 });

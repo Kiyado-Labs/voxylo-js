@@ -79,6 +79,8 @@ export interface AgentTextEvent {
 export interface RoomHandlers {
   onTurn(turn: Turn): void;
   onAgentText(e: AgentTextEvent): void;
+  /** The user's own speech as the agent's speech-to-text hears it; same shape as agent text */
+  onUserText(e: AgentTextEvent): void;
   onRich(message: RichMessage): void;
   onSessionEvent(e: SessionEvent): void;
   onAgentState(state: AgentState): void;
@@ -164,9 +166,23 @@ export async function connectRoom(
   listen(EV.disconnected, () => handlers.onDisconnected());
 
   room.registerTextStreamHandler(TOPIC_TRANSCRIPTION, (reader, participant) => {
-    // The user's own speech is transcribed under their identity; only agent output is reply text
-    if (closed || participant.identity === room.localParticipant.identity) return;
+    if (closed) return;
     const streamId = reader.info.attributes?.["lk.segment_id"] ?? reader.info.id;
+    // LiveKit Agents publishes the user's transcript under the user's identity: each interim
+    // update is a new stream carrying the whole text so far, and the last one is marked final
+    if (participant.identity === room.localParticipant.identity) {
+      const final = reader.info.attributes?.["lk.transcription_final"] !== "false";
+      void (async () => {
+        let text = "";
+        try {
+          for await (const chunk of reader) text += chunk;
+        } catch {
+          return;
+        }
+        if (!closed && text) handlers.onUserText({ streamId, text, done: final });
+      })();
+      return;
+    }
     void (async () => {
       let text = "";
       try {

@@ -10,6 +10,7 @@ function handlers(): RoomHandlers & { [K in keyof RoomHandlers]: ReturnType<type
   return {
     onTurn: vi.fn(),
     onAgentText: vi.fn(),
+    onUserText: vi.fn(),
     onRich: vi.fn(),
     onSessionEvent: vi.fn(),
     onAgentState: vi.fn(),
@@ -48,7 +49,7 @@ describe("connectRoom", () => {
     expect(h.onSessionEvent).toHaveBeenCalledWith({ type: "ended", reason: "completed" });
   });
 
-  it("streams agent text and ignores the user's own transcription", async () => {
+  it("streams agent text", async () => {
     const { room, h } = await setup();
     await room.streamText("lk.transcription", new FakeTextReader("s1", ["Hel", "lo"], { "lk.segment_id": "seg1" }), "agent-1");
     await vi.waitFor(() => expect(h.onAgentText).toHaveBeenCalledTimes(3));
@@ -57,9 +58,21 @@ describe("connectRoom", () => {
       { streamId: "seg1", text: "Hello", done: false },
       { streamId: "seg1", text: "Hello", done: true },
     ]);
-    h.onAgentText.mockClear();
-    await room.streamText("lk.transcription", new FakeTextReader("s2", ["me"]), room.localParticipant.identity);
-    await new Promise((r) => setTimeout(r, 10));
+    expect(h.onUserText).not.toHaveBeenCalled();
+  });
+
+  it("streams the user's own transcription live, final only when LiveKit marks it final", async () => {
+    const { room, h } = await setup();
+    const me = room.localParticipant.identity;
+    await room.streamText("lk.transcription", new FakeTextReader("x1", ["Show me"], { "lk.segment_id": "SG_1", "lk.transcription_final": "false" }), me);
+    await room.streamText("lk.transcription", new FakeTextReader("x2", ["Show me your work"], { "lk.segment_id": "SG_1", "lk.transcription_final": "false" }), me);
+    await room.streamText("lk.transcription", new FakeTextReader("x3", ["Show me your work."], { "lk.segment_id": "SG_1", "lk.transcription_final": "true" }), me);
+    await vi.waitFor(() => expect(h.onUserText).toHaveBeenCalledTimes(3));
+    expect(h.onUserText.mock.calls.map((c) => c[0])).toEqual([
+      { streamId: "SG_1", text: "Show me", done: false },
+      { streamId: "SG_1", text: "Show me your work", done: false },
+      { streamId: "SG_1", text: "Show me your work.", done: true },
+    ]);
     expect(h.onAgentText).not.toHaveBeenCalled();
   });
 
