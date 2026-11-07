@@ -401,4 +401,96 @@ describe("createClient", () => {
     t.room.sendData("voxylo.turn", { turnId: "t1", role: "agent", content: "Hi, I'm Niyas's AI", atMs: 1 }, agent);
     expect(onTurn).toHaveBeenCalledWith(expect.objectContaining({ content: "Hi, I'm Niyas's AI" }));
   });
+
+  describe("client tools and context", () => {
+    const openProject = (handler = vi.fn(() => ({ opened: true }))) => ({
+      name: "openProject",
+      description: "Open a project page",
+      parameters: { type: "object" as const, properties: { slug: { type: "string" } } },
+      handler,
+    });
+    const sent = (room: FakeRoom, topic: string) => room.textStreams.filter((t) => t.topic === topic).map((t) => JSON.parse(t.text));
+
+    it("declares tools registered before connect and runs them for the agent", async () => {
+      const t = setup();
+      const handler = vi.fn(() => ({ opened: true }));
+      const onCall = vi.fn();
+      t.client.on("toolCall", onCall);
+      t.client.registerTool(openProject(handler));
+      await t.client.connect({ mode: "voice" });
+      expect(sent(t.room, "voxylo.client.tools").at(-1)?.tools[0]?.name).toBe("openProject");
+      t.room.addAgent("agent-1");
+      expect(await t.room.invokeRpc("voxylo.client_tool", { callId: "c1", name: "openProject", args: { slug: "voxylo" } })).toEqual({ ok: true, result: { opened: true } });
+      expect(handler).toHaveBeenCalledWith({ slug: "voxylo" }, expect.anything());
+      expect(onCall).toHaveBeenCalledWith(expect.objectContaining({ name: "openProject", result: { opened: true } }));
+    });
+
+    it("sends context set before connect once connected", async () => {
+      const t = setup();
+      t.client.setContext({ path: "/projects/voxylo", projectSlug: "voxylo" });
+      await t.client.connect();
+      expect(sent(t.room, "voxylo.client.context")).toEqual([{ context: { path: "/projects/voxylo", projectSlug: "voxylo" } }]);
+    });
+
+    it("re-sends tools and context after a reconnect", async () => {
+      const t = setup();
+      t.client.registerTool(openProject());
+      t.client.setContext({ path: "/" });
+      await t.client.connect();
+      t.room.emit("reconnecting");
+      t.room.emit("reconnected");
+      expect(sent(t.room, "voxylo.client.tools")).toHaveLength(2);
+      expect(sent(t.room, "voxylo.client.context")).toHaveLength(2);
+    });
+
+    it("stops answering and sending after disconnect", async () => {
+      const t = setup();
+      t.client.registerTool(openProject());
+      await t.client.connect();
+      await t.client.disconnect();
+      expect(t.room.rpcHandlers.has("voxylo.client_tool")).toBe(false);
+      t.client.setContext({ path: "/later" });
+      await new Promise((r) => setTimeout(r, 150));
+      expect(sent(t.room, "voxylo.client.context")).toEqual([]);
+    });
+
+    it("re-sends tools and context once the agent is ready, since it joins after the page connects", async () => {
+      const t = setup();
+      t.client.registerTool(openProject());
+      t.client.setContext({ path: "/" });
+      await t.client.connect();
+      t.room.textStreams.length = 0;
+      const agent = t.room.addAgent("agent-1");
+      agent.attributes = { "lk.agent.state": "listening" };
+      t.room.emit("participantAttributesChanged", { "lk.agent.state": "listening" }, agent);
+      t.room.emit("participantAttributesChanged", { "lk.agent.state": "speaking" }, agent);
+      expect(sent(t.room, "voxylo.client.tools").map((d) => d.tools.map((x: { name: string }) => x.name))).toEqual([["openProject"]]);
+      expect(sent(t.room, "voxylo.client.context")).toEqual([{ context: { path: "/" } }]);
+    });
+
+    it("tells a ready agent there are no tools and no context, so a resumed chat drops the old page's", async () => {
+      const t = setup();
+      await t.client.connect();
+      const agent = t.room.addAgent("agent-1");
+      agent.attributes = { "lk.agent.state": "listening" };
+      t.room.emit("participantAttributesChanged", { "lk.agent.state": "listening" }, agent);
+      expect(sent(t.room, "voxylo.client.tools")).toEqual([{ rev: expect.any(Number), tools: [] }]);
+      expect(sent(t.room, "voxylo.client.context")).toEqual([{ context: null }]);
+    });
+
+    it("rejects an invalid tool with a TypeError", () => {
+      const t = setup();
+      expect(() => t.client.registerTool({ ...openProject(), name: "has spaces" })).toThrow(TypeError);
+    });
+
+    it("logs worker warnings about rejected tools", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const t = setup();
+      await t.client.connect();
+      t.room.sendData("voxylo.session", { type: "warning", code: "client_tool_rejected", detail: "kb_search: name collides with a server tool" }, t.room.addAgent());
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("client_tool_rejected"), expect.stringContaining("kb_search"));
+      warn.mockRestore();
+    });
+  });
 });
+

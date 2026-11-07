@@ -38,8 +38,16 @@ export interface TextReaderLike extends AsyncIterable<string> {
   info: { id: string; attributes?: Record<string, string> };
 }
 
+export interface RpcDataLike {
+  requestId: string;
+  callerIdentity: string;
+  payload: string;
+  responseTimeout: number;
+}
+
 export interface LocalParticipantLike {
   identity: string;
+  sendText(text: string, opts: { topic: string }): Promise<unknown>;
   publishData(data: Uint8Array, opts: { reliable: boolean; topic: string }): Promise<void>;
   setAttributes(attributes: Record<string, string>): Promise<void>;
   setMicrophoneEnabled(enabled: boolean): Promise<unknown>;
@@ -56,6 +64,8 @@ export interface RoomLike {
   on(event: string, fn: (...args: any[]) => void): unknown;
   off(event: string, fn: (...args: any[]) => void): unknown;
   registerTextStreamHandler(topic: string, handler: (reader: TextReaderLike, participant: { identity: string }) => void): void;
+  registerRpcMethod(method: string, handler: (data: RpcDataLike) => Promise<string>): void;
+  unregisterRpcMethod(method: string): void;
   unregisterTextStreamHandler?(topic: string): void;
 }
 
@@ -81,6 +91,9 @@ export interface RoomHandlers {
 
 export interface RoomConnection {
   sendCommand(cmd: ClientCommand): Promise<void>;
+  /** Text streams have no size cap, unlike data packets (~15 KB) */
+  sendTextStream(topic: string, text: string): Promise<void>;
+  registerRpc(method: string, handler: (data: RpcDataLike) => Promise<string>): void;
   setMic(on: boolean): Promise<void>;
   getMicTrack(): MediaStreamTrack | null;
   isAgent(identity: string): boolean;
@@ -168,9 +181,12 @@ export async function connectRoom(
     })();
   });
 
+  const rpcMethods = new Set<string>();
   const detach = () => {
     for (const [event, fn] of listeners) room.off(event, fn);
     room.unregisterTextStreamHandler?.(TOPIC_TRANSCRIPTION);
+    for (const m of rpcMethods) room.unregisterRpcMethod(m);
+    rpcMethods.clear();
   };
 
   try {
@@ -197,6 +213,17 @@ export async function connectRoom(
         reliable: true,
         topic: TOPIC_CLIENT_CMD,
       });
+    },
+    async sendTextStream(topic, text) {
+      if (closed) return;
+      await room.localParticipant.sendText(text, { topic });
+    },
+    registerRpc(method, handler) {
+      if (closed) return;
+      // LiveKit throws if a method is registered twice
+      if (rpcMethods.has(method)) room.unregisterRpcMethod(method);
+      rpcMethods.add(method);
+      room.registerRpcMethod(method, handler);
     },
     async setMic(on) {
       await room.localParticipant.setMicrophoneEnabled(on);

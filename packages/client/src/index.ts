@@ -3,6 +3,8 @@ export type { ConnectOptions, VoxyloClient, VoxyloClientEvents, VoxyloClientOpti
 export { VoxyloError } from "./errors";
 export type { VoxyloErrorCode } from "./errors";
 export type { LevelSource } from "./audio";
+export type { AgentContext } from "./context";
+export type { ClientToolDefinition, JsonSchemaObject, ToolCallEvent } from "./tools";
 export type { AgentTextEvent } from "./room/adapter";
 export type { CallerInfo, VoxyloSession } from "./session";
 export type { AgentState, ClientState, ConnectionStatus, Message } from "./state/types";

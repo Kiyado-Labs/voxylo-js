@@ -1,4 +1,4 @@
-import type { AudioTrackLike, ParticipantLike, RoomLike, TextReaderLike } from "./adapter";
+import type { AudioTrackLike, ParticipantLike, RoomLike, RpcDataLike, TextReaderLike } from "./adapter";
 
 type Handler = (...args: any[]) => void;
 
@@ -46,6 +46,8 @@ export class FakeRoom implements RoomLike {
   connectError: Error | null = null;
   calls: string[] = [];
   micImpl: ((on: boolean) => Promise<void>) | null = null;
+  textStreams: { topic: string; text: string }[] = [];
+  rpcHandlers = new Map<string, (data: RpcDataLike) => Promise<string>>();
 
   localParticipant = {
     identity: "widget:p:local",
@@ -59,6 +61,10 @@ export class FakeRoom implements RoomLike {
       this.calls.push(`mic:${on}`);
       if (this.micImpl) await this.micImpl(on);
       this.micEnabled = on;
+    },
+    sendText: async (text: string, opts: { topic: string }) => {
+      this.textStreams.push({ topic: opts.topic, text });
+      return {};
     },
     getTrackPublication: (source: string) =>
       source === "microphone" && this.micEnabled ? { track: { mediaStreamTrack: this.micTrack } } : undefined,
@@ -88,6 +94,17 @@ export class FakeRoom implements RoomLike {
   off(event: string, fn: Handler) {
     this.handlers.get(event)?.delete(fn);
     return this;
+  }
+  registerRpcMethod(method: string, fn: (data: RpcDataLike) => Promise<string>) {
+    this.rpcHandlers.set(method, fn);
+  }
+  unregisterRpcMethod(method: string) {
+    this.rpcHandlers.delete(method);
+  }
+  async invokeRpc(method: string, payload: unknown, callerIdentity = "agent-1", responseTimeout = 10000) {
+    const fn = this.rpcHandlers.get(method);
+    if (!fn) throw new Error(`no rpc handler for ${method}`);
+    return JSON.parse(await fn({ requestId: "req-1", callerIdentity, payload: JSON.stringify(payload), responseTimeout }));
   }
   registerTextStreamHandler(topic: string, fn: (reader: TextReaderLike, p: { identity: string }) => void) {
     this.textHandlers.set(topic, fn);

@@ -142,4 +142,19 @@ describe("connectRoom", () => {
     room.connectError = new Error("could not establish signal connection");
     await expect(connectRoom(room, SESSION, handlers(), { sdk: "x" })).rejects.toThrow("signal");
   });
+
+  it("sends text streams on a topic", async () => {
+    const { room, conn } = await setup();
+    await conn.sendTextStream("voxylo.client.tools", '{"rev":1,"tools":[]}');
+    expect(room.textStreams).toEqual([{ topic: "voxylo.client.tools", text: '{"rev":1,"tools":[]}' }]);
+  });
+
+  it("registers an RPC method and removes it on close", async () => {
+    const { room, conn } = await setup();
+    conn.registerRpc("voxylo.client_tool", async (data) => JSON.stringify({ echo: data.payload, from: data.callerIdentity }));
+    expect(await room.invokeRpc("voxylo.client_tool", { a: 1 })).toEqual({ echo: '{"a":1}', from: "agent-1" });
+    await conn.close();
+    expect(room.rpcHandlers.has("voxylo.client_tool")).toBe(false);
+  });
 });
+

@@ -1,4 +1,5 @@
 import { createBrowserEnv, createLevelMonitor, type BrowserEnv, type LevelSource, type MicHold } from "./audio";
+import { ContextChannel, type AgentContext } from "./context";
 import { VoxyloError, asVoxyloError } from "./errors";
 import type { SessionEndReason, Turn } from "./protocol";
 import { createResumeStore, resumeKey, type ResumeOption } from "./resume";
@@ -18,6 +19,7 @@ import {
 } from "./session";
 import { createStore } from "./state/store";
 import { INITIAL_STATE, type ClientState } from "./state/types";
+import { ToolRegistry, type ClientToolDefinition, type ToolCallEvent } from "./tools";
 import { SDK_NAME, SDK_VERSION } from "./version";
 
 export interface VoxyloClientOptions {
@@ -47,6 +49,7 @@ export interface ConnectOptions {
 export interface VoxyloClientEvents {
   turn: Turn;
   agentText: AgentTextEvent;
+  toolCall: ToolCallEvent;
   sessionEnd: SessionEndReason;
   error: VoxyloError;
 }
@@ -63,6 +66,10 @@ export interface VoxyloClient {
   setSpeakerEnabled(on: boolean): Promise<void>;
   /** Call from a click when `audioBlocked` is true */
   startAudio(): Promise<void>;
+  /** Lets the agent call a function in this page; returns an unregister function */
+  registerTool(def: ClientToolDefinition): () => void;
+  /** Tells the agent what the user is looking at; read at its next reply. null clears it */
+  setContext(context: AgentContext | null): void;
   getAudioLevel(source: LevelSource): number;
   /** Called at most once per animation frame; for animations that should skip React renders */
   subscribeAudioLevel(source: LevelSource, fn: (level: number) => void): () => void;
@@ -94,6 +101,8 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
   const levels = createLevelMonitor(deps.env);
   const listeners = new Map<keyof VoxyloClientEvents, Set<Listener>>();
   const audioEls = new Set<HTMLMediaElement>();
+  const tools = new ToolRegistry({ onCall: (e) => emit("toolCall", e) });
+  const context = new ContextChannel();
 
   let conn: RoomConnection | null = null;
   let agentTrack: AudioTrackLike | null = null;
@@ -145,6 +154,8 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
   async function teardown() {
     const c = conn;
     conn = null;
+    tools.detach();
+    context.detach();
     releaseAudio();
     levels.reset();
     if (c) await c.close().catch(() => {});
@@ -164,6 +175,7 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
   }
 
   function handlersFor(a: number): RoomHandlers {
+    let agentReady = false;
     const live =
       <A extends unknown[]>(fn: (...args: A) => void) =>
       (...args: A) => {
@@ -175,8 +187,16 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
       onRich: () => {},
       onSessionEvent: live((e) => {
         if (e.type === "ended") endSession(e.reason);
+        // The worker rejected a tool or the context; the developer needs to see why
+        else console.warn(`[voxylo] ${e.code}`, e.detail);
       }),
       onAgentState: live((s) => {
+        // The worker sets its state only after it listens for tools and context; what was sent before is lost
+        if (!agentReady && conn) {
+          agentReady = true;
+          tools.announce();
+          context.announce();
+        }
         store.set({ agentState: s });
         levels.setAgentSpeaking(s === "speaking");
       }),
@@ -187,7 +207,14 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
         fail(new VoxyloError("connection_failed", "The connection to the agent was lost"));
       }),
       onReconnecting: live(() => store.set({ status: "reconnecting" })),
-      onReconnected: live(() => store.set({ status: "connected" })),
+      onReconnected: live(() => {
+        store.set({ status: "connected" });
+        // Text streams sent while the link was down may be lost
+        if (conn) {
+          tools.attach(conn);
+          context.attach(conn);
+        }
+      }),
       onAudioPlaybackChanged: live((canPlay) => store.set({ audioBlocked: !canPlay })),
     };
   }
@@ -257,6 +284,8 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
         return;
       }
       conn = c;
+      tools.attach(c);
+      context.attach(c);
 
       if (voice) {
         try {
@@ -363,6 +392,9 @@ export function createClient(options: VoxyloClientOptions, deps: ClientDeps): Vo
       const canPlay = await c.startAudio();
       store.set({ audioBlocked: !canPlay });
     },
+
+    registerTool: (def) => tools.register(def),
+    setContext: (value) => context.set(value),
 
     getAudioLevel: (source) => levels.get(source),
     subscribeAudioLevel: (source, fn) => levels.subscribe(source, fn),
